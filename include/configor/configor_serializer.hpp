@@ -24,225 +24,301 @@
 #include "configor_token.hpp"
 #include "configor_value.hpp"
 
-#include <ios>          // std::streamsize
-#include <ostream>      // std::basic_ostream
-#include <type_traits>  // std::char_traits
+#include <functional>        // std::function
+#include <initializer_list>  // std::initializer_list
+#include <ios>               // std::streamsize
+#include <locale>            // std::locale
+#include <ostream>           // std::basic_ostream
 
 namespace configor
 {
 
-template <typename _ConfTy, template <typename> class _SourceEncoding, template <typename> class _TargetEncoding>
+namespace detail
+{
+
+template <typename _ValTy, typename _TargetCharTy>
 class basic_serializer
 {
 public:
-    using config_type  = _ConfTy;
-    using integer_type = typename _ConfTy::integer_type;
-    using float_type   = typename _ConfTy::float_type;
-    using char_type    = typename _ConfTy::char_type;
-    using string_type  = typename _ConfTy::string_type;
+    using value_type       = _ValTy;
+    using source_char_type = typename value_type::char_type;
+    using target_char_type = _TargetCharTy;
 
-    virtual void target(std::basic_ostream<char_type>& os) = 0;
+    explicit basic_serializer(std::basic_ostream<target_char_type>& os)
+        : os_(os.rdbuf())
+        , err_handler_(nullptr)
+        , source_decoder_(nullptr)
+        , target_encoder_(nullptr)
+    {
+        os_.setf(os.flags(), std::ios_base::floatfield);
+        os_.imbue(std::locale(std::locale::classic(), os.getloc(), std::locale::collate | std::locale::ctype));
+    }
 
+    virtual void dump(const value_type& c)
+    {
+        try
+        {
+            do_dump(c);
+            next(token_type::end_of_input);
+        }
+        catch (...)
+        {
+            if (err_handler_)
+                err_handler_->handle(std::current_exception());
+            else
+                throw;
+        }
+    }
+
+    inline void set_error_handler(configor::error_handler* eh)
+    {
+        err_handler_ = eh;
+    }
+
+    template <template <class> class _Encoding>
+    inline void set_source_encoding()
+    {
+        source_decoder_ = _Encoding<source_char_type>::decode;
+    }
+
+    template <template <class> class _Encoding>
+    inline void set_target_encoding()
+    {
+        target_encoder_ = _Encoding<target_char_type>::encode;
+    }
+
+protected:
     virtual void next(token_type t) = 0;
 
-    virtual void put_integer(integer_type i)      = 0;
-    virtual void put_float(float_type f)          = 0;
-    virtual void put_string(const string_type& s) = 0;
+    virtual void put_integer(typename value_type::integer_type i)      = 0;
+    virtual void put_float(typename value_type::float_type f)          = 0;
+    virtual void put_string(const typename value_type::string_type& s) = 0;
+
+    virtual void do_dump(const value_type& c)
+    {
+        switch (c.type())
+        {
+        case value_constant::object:
+        {
+            const auto& object = *c.data().object;
+
+            next(token_type::begin_object);
+            if (object.empty())
+            {
+                next(token_type::end_object);
+                return;
+            }
+
+            auto iter = object.cbegin();
+            auto size = object.size();
+            for (std::size_t i = 0; i < size; ++i, ++iter)
+            {
+                next(token_type::value_string);
+                put_string(iter->first);
+                next(token_type::name_separator);
+
+                do_dump(iter->second);
+
+                // not last element
+                if (i != size - 1)
+                {
+                    next(token_type::value_separator);
+                }
+            }
+            next(token_type::end_object);
+            return;
+        }
+
+        case value_constant::array:
+        {
+            next(token_type::begin_array);
+
+            auto& v = *c.data().vector;
+            if (v.empty())
+            {
+                next(token_type::end_array);
+                return;
+            }
+
+            const auto size = v.size();
+            for (std::size_t i = 0; i < size; ++i)
+            {
+                do_dump(v.at(i));
+                // not last element
+                if (i != size - 1)
+                {
+                    next(token_type::value_separator);
+                }
+            }
+            next(token_type::end_array);
+            return;
+        }
+
+        case value_constant::string:
+        {
+            next(token_type::value_string);
+            put_string(*c.data().string);
+            return;
+        }
+
+        case value_constant::boolean:
+        {
+            if (c.data().boolean)
+            {
+                next(token_type::literal_true);
+            }
+            else
+            {
+                next(token_type::literal_false);
+            }
+            return;
+        }
+
+        case value_constant::integer:
+        {
+            next(token_type::value_integer);
+            put_integer(c.data().integer);
+            return;
+        }
+
+        case value_constant::floating:
+        {
+            next(token_type::value_float);
+            put_float(c.data().floating);
+            return;
+        }
+
+        case value_constant::null:
+        {
+            next(token_type::literal_null);
+            return;
+        }
+        }
+    }
+
+protected:
+    std::basic_ostream<target_char_type> os_;
+    error_handler*                       err_handler_;
+    encoding::decoder<source_char_type>  source_decoder_;
+    encoding::encoder<target_char_type>  target_encoder_;
 };
 
-namespace detail
+//
+// serializable
+//
+
+template <class _Args, template <class, class> class _SerializerTy, template <class> class _DefaultEncoding>
+class serializable
 {
-template <typename _SerialTy, typename _ConfTy = typename _SerialTy::config_type>
-void do_dump_config(const _ConfTy& c, _SerialTy& serializer);
-}
+public:
+    using value_type = basic_value<_Args>;
 
-template <typename _SerialTy, typename _ConfTy = typename _SerialTy::config_type,
-          typename = typename std::enable_if<is_config<_ConfTy>::value>::type>
-void dump_config(const _ConfTy& c, std::basic_ostream<typename _ConfTy::char_type>& os, _SerialTy& serializer,
-                 error_handler* eh)
-{
-    using char_type = typename _ConfTy::char_type;
+    template <typename _TargetCharTy>
+    using serializer_type = _SerializerTy<value_type, _TargetCharTy>;
 
-    try
+    template <typename _TargetCharTy>
+    using serializer_option = typename serializer_type<_TargetCharTy>::option;
+
+    // dump to stream
+    template <typename _TargetCharTy>
+    static void dump(std::basic_ostream<_TargetCharTy>& os, const value_type& v,
+                     std::initializer_list<serializer_option<_TargetCharTy>> options = {})
     {
-        serializer.target(os);
-        detail::do_dump_config(c, serializer);
-        serializer.next(token_type::end_of_input);
-    }
-    catch (...)
-    {
-        if (eh)
-            eh->handle(std::current_exception());
-        else
-            throw;
-    }
-}
-
-template <typename _SerialTy, typename _ConfTy = typename _SerialTy::config_type,
-          typename = typename std::enable_if<is_config<_ConfTy>::value
-                                             && std::is_default_constructible<_SerialTy>::value>::type>
-void dump_config(const _ConfTy& c, std::basic_ostream<typename _ConfTy::char_type>& os, error_handler* eh = nullptr)
-{
-    _SerialTy s{};
-    dump_config(c, os, s, eh);
-}
-
-namespace detail
-{
-
-template <typename _SerialTy, typename _ConfTy>
-void do_dump_config(const _ConfTy& c, _SerialTy& serializer)
-{
-    switch (c.type())
-    {
-    case config_value_type::object:
-    {
-        const auto& object = *c.raw_value().data.object;
-
-        serializer.next(token_type::begin_object);
-        if (object.empty())
-        {
-            serializer.next(token_type::end_object);
-            return;
-        }
-
-        auto iter = object.cbegin();
-        auto size = object.size();
-        for (std::size_t i = 0; i < size; ++i, ++iter)
-        {
-            serializer.next(token_type::value_string);
-            serializer.put_string(iter->first);
-            serializer.next(token_type::name_separator);
-
-            do_dump_config(iter->second, serializer);
-
-            // not last element
-            if (i != size - 1)
-            {
-                serializer.next(token_type::value_separator);
-            }
-        }
-        serializer.next(token_type::end_object);
-        return;
+        serializer_type<_TargetCharTy> s{ os };
+        s.template set_source_encoding<_DefaultEncoding>();
+        s.template set_target_encoding<_DefaultEncoding>();
+        s.prepare(options);
+        s.dump(v);
     }
 
-    case config_value_type::array:
+    // dump to string
+    template <typename _TargetCharTy>
+    static void dump(typename _Args::template string_type<_TargetCharTy>& str, const value_type& v,
+                     std::initializer_list<serializer_option<_TargetCharTy>> options = {})
     {
-        serializer.next(token_type::begin_array);
-
-        auto& v = *c.raw_value().data.vector;
-        if (v.empty())
-        {
-            serializer.next(token_type::end_array);
-            return;
-        }
-
-        const auto size = v.size();
-        for (std::size_t i = 0; i < size; ++i)
-        {
-            do_dump_config(v.at(i), serializer);
-            // not last element
-            if (i != size - 1)
-            {
-                serializer.next(token_type::value_separator);
-            }
-        }
-        serializer.next(token_type::end_array);
-        return;
+        detail::fast_string_ostreambuf<_TargetCharTy> buf{ str };
+        std::basic_ostream<_TargetCharTy>             os{ &buf };
+        return dump<_TargetCharTy>(os, v, options);
     }
 
-    case config_value_type::string:
+    template <typename _TargetCharTy = typename value_type::char_type>
+    static typename _Args::template string_type<_TargetCharTy>
+    dump(const value_type& v, std::initializer_list<serializer_option<_TargetCharTy>> options = {})
     {
-        serializer.next(token_type::value_string);
-        serializer.put_string(*c.raw_value().data.string);
-        return;
+        typename _Args::template string_type<_TargetCharTy> result;
+        dump<_TargetCharTy>(result, v, options);
+        return result;
     }
-
-    case config_value_type::boolean:
-    {
-        if (c.raw_value().data.boolean)
-        {
-            serializer.next(token_type::literal_true);
-        }
-        else
-        {
-            serializer.next(token_type::literal_false);
-        }
-        return;
-    }
-
-    case config_value_type::number_integer:
-    {
-        serializer.next(token_type::value_integer);
-        serializer.put_integer(c.raw_value().data.number_integer);
-        return;
-    }
-
-    case config_value_type::number_float:
-    {
-        serializer.next(token_type::value_float);
-        serializer.put_float(c.raw_value().data.number_float);
-        return;
-    }
-
-    case config_value_type::null:
-    {
-        serializer.next(token_type::literal_null);
-        return;
-    }
-    }
-}
+};
 
 //
 // indent
 //
 
-template <typename _StrTy>
+template <typename _CharTy>
 class indent
 {
 public:
-    using string_type = _StrTy;
-    using char_type   = typename string_type::value_type;
+    using char_type   = _CharTy;
+    using string_type = std::basic_string<char_type>;
 
-    inline indent()
-        : length_(0)
-        , indent_char_(0)
+    indent(uint8_t step, char_type ch)
+        : step_(step)
+        , depth_(0)
+        , indent_char_(ch)
         , indent_string_()
     {
+        reverse(static_cast<size_t>(step_ * 2));
     }
 
-    inline void init(char_type ch)
+    inline void operator++()
     {
-        indent_char_ = ch;
-        indent_string_.resize(16, indent_char_);
+        ++depth_;
+        reverse(static_cast<size_t>(depth_ * step_));
     }
 
-    inline indent& operator*(unsigned int length)
+    inline void operator--()
     {
-        if (indent_char_)
-        {
-            length_ = length;
-            if (indent_string_.size() < static_cast<size_t>(length))
-            {
-                indent_string_.resize(indent_string_.size() * 2, indent_char_);
-            }
-        }
-        return *this;
+        --depth_;
+    }
+
+    inline void put(std::basic_ostream<char_type>& os) const
+    {
+        os.write(indent_string_.c_str(), static_cast<std::streamsize>(depth_ * step_));
+    }
+
+    inline void put(std::basic_ostream<char_type>& os, int length)
+    {
+        reverse(static_cast<size_t>(length));
+        os.write(indent_string_.c_str(), static_cast<std::streamsize>(length));
     }
 
     friend inline std::basic_ostream<char_type>& operator<<(std::basic_ostream<char_type>& os, const indent& i)
     {
-        if (i.indent_char_ && i.length_)
+        if (i.indent_char_ && i.step_ > 0 && i.depth_ > 0)
         {
-            os.write(i.indent_string_.c_str(), static_cast<std::streamsize>(i.length_));
+            i.put(os);
         }
         return os;
     }
 
 private:
-    unsigned int length_;
-    char_type    indent_char_;
-    string_type  indent_string_;
+    void reverse(size_t length)
+    {
+        if (indent_char_)
+        {
+            if (indent_string_.size() < length)
+            {
+                indent_string_.resize(length + static_cast<size_t>(step_ * 2), indent_char_);
+            }
+        }
+    }
+
+private:
+    uint8_t     step_;
+    uint16_t    depth_;
+    char_type   indent_char_;
+    string_type indent_string_;
 };
 
 }  // namespace detail

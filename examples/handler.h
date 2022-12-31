@@ -5,21 +5,18 @@
 #include <iomanip>
 #include <sstream>
 
-using std::istringstream;
-using std::ostringstream;
-
 struct Request
 {
     int user_id;
 
-    JSON_BIND(Request, user_id);
+    CONFIGOR_BIND(json::value, Request, REQUIRED(user_id));
 };
 
 struct Response
 {
     std::shared_ptr<UserInfo> user_info;
 
-    JSON_BIND(Response, user_info);
+    CONFIGOR_BIND(json::value, Response, REQUIRED(user_info));
 };
 
 // 获取用户信息接口
@@ -27,7 +24,7 @@ class GetUserInfoHandler
 {
 public:
     // POST请求
-    void POST(istringstream& req, ostringstream& resp)
+    void POST(std::istringstream& req, std::ostringstream& resp)
     {
         // 解析请求，可以直接反序列化到 Request 结构体中
         Request req_body;

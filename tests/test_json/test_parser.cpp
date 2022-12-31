@@ -10,8 +10,16 @@ TEST_CASE("test_parser")
 {
     SECTION("test_parse")
     {
-        json j;
+        json::value j;
+
+        // parse c-style string
         CHECK_NOTHROW(j = json::parse("{ \"happy\": true, \"pi\": 3.141, \"name\": \"中文测试\" }"));
+        CHECK(j["happy"].get<bool>());
+        CHECK(j["pi"].get<double>() == Approx(3.141));
+        CHECK(j["name"].get<std::string>() == "中文测试");
+
+        // parse string
+        CHECK_NOTHROW(j = json::parse(std::string("{ \"happy\": true, \"pi\": 3.141, \"name\": \"中文测试\" }")));
         CHECK(j["happy"].get<bool>());
         CHECK(j["pi"].get<double>() == Approx(3.141));
         CHECK(j["name"].get<std::string>() == "中文测试");
@@ -67,13 +75,6 @@ TEST_CASE("test_parser")
         // unexpected character
         CHECK_THROWS_AS(json::parse("()"), configor_deserialization_error);
 
-        // check document
-        {
-            json::parse_args args;
-            args.check_document = true;
-            CHECK_THROWS_AS(json::parse("true", args), configor_deserialization_error);
-        }
-
         // invalid literal
         CHECK_THROWS_AS(json::parse("trux"), configor_deserialization_error);
         CHECK_THROWS_AS(json::parse("falsx"), configor_deserialization_error);
@@ -106,14 +107,10 @@ TEST_CASE("test_parser")
 
         // not allow comments
         {
-            CHECK_THROWS_AS(json::parse("{/**/}"), configor_deserialization_error);
-            CHECK_THROWS_AS(json::parse("{//\n}"), configor_deserialization_error);
-
-            json::parse_args args;
-            args.allow_comments = true;
-            CHECK_NOTHROW(json::parse("{/**/}", args));
-            CHECK_NOTHROW(json::parse("{//\n}", args));
-            CHECK_THROWS_AS(json::parse("{/x\n}", args), configor_deserialization_error);
+            // TODO
+            CHECK_NOTHROW(json::parse("{/**/}"));
+            CHECK_NOTHROW(json::parse("{//\n}"));
+            CHECK_THROWS_AS(json::parse("{/x\n}"), configor_deserialization_error);
         }
 
         // unexpect end
@@ -130,21 +127,19 @@ TEST_CASE("test_parser")
     SECTION("test_error_policy")
     {
         error_handler_with<error_policy::strict> strict_handler{};
-        CHECK_THROWS_AS(json::parse("\f", json::parse_args{}, &strict_handler), configor_deserialization_error);
+        CHECK_THROWS_AS(json::parse("\f", { json::parser::with_error_handler(&strict_handler) }),
+                        configor_deserialization_error);
 
         error_handler_with<error_policy::ignore> ignore_handler{};
-        CHECK_NOTHROW(json::parse("\f", json::parse_args{}, &ignore_handler));
+        CHECK_NOTHROW(json::parse("\f", { json::parser::with_error_handler(&ignore_handler) }));
 
         error_handler_with<error_policy::record> record_handler{};
-        CHECK_NOTHROW(json::parse("\f", json::parse_args{}, &record_handler));
+        CHECK_NOTHROW(json::parse("\f", { json::parser::with_error_handler(&record_handler) }));
         CHECK_FALSE(record_handler.error.empty());
     }
 
     SECTION("test_comment")
     {
-        json::parse_args args;
-        args.allow_comments = true;
-
         auto j = json::parse(R"(// some comments
         /* some comments */
         {
@@ -157,11 +152,13 @@ TEST_CASE("test_parser")
             some comments
             "pi": 3,
             */"name": "中文测试"
-        }// some comments)",
-                             args);
+        }// some comments)");
         CHECK(j["happy"].get<bool>());
         CHECK(j["pi"].get<double>() == Approx(3.141));
         CHECK(j["name"].get<std::string>() == "中文测试");
+
+        CHECK_THROWS_AS(json::parse("/* aaaa"), configor_deserialization_error);
+        CHECK_THROWS_AS(json::parse("/* aaaa *"), configor_deserialization_error);
     }
 
     SECTION("test_parse_surrogate")
@@ -174,31 +171,32 @@ TEST_CASE("test_parser")
     SECTION("test_read_from_file")
     {
         std::array<std::string, 5> files = {
-            "tests/data/json.org/1.json", "tests/data/json.org/2.json", "tests/data/json.org/3.json", "tests/data/json.org/4.json", "tests/data/json.org/5.json",
+            "tests/data/json.org/1.json", "tests/data/json.org/2.json", "tests/data/json.org/3.json",
+            "tests/data/json.org/4.json", "tests/data/json.org/5.json",
         };
 
-        std::function<void(json&)> tests[] = {
-            [](json& j)
+        std::function<void(json::value&)> tests[] = {
+            [](json::value& j)
             {
                 // test 1
                 auto list = j["glossary"]["GlossDiv"]["GlossList"]["GlossEntry"]["GlossDef"]["GlossSeeAlso"];
                 CHECK(list[0].get<std::string>() == "GML");
                 CHECK(list[1].get<std::string>() == "XML");
             },
-            [](json& j)
+            [](json::value& j)
             {
                 // test 2
                 CHECK(j["menu"]["popup"]["menuitem"][0]["onclick"].get<std::string>() == "CreateNewDoc()");
             },
-            [](json& j)
+            [](json::value& j)
             {
                 // test 3
             },
-            [](json& j)
+            [](json::value& j)
             {
                 // test 4
             },
-            [](json& j)
+            [](json::value& j)
             {
                 // test 5
                 CHECK(j["menu"]["items"][2].is_null());
@@ -211,8 +209,8 @@ TEST_CASE("test_parser")
             // read a json file
             std::ifstream ifs(files[i]);
 
-            json j;
-            CHECK_NOTHROW((ifs >> j));
+            json::value j;
+            CHECK_NOTHROW((ifs >> json::wrap(j)));
 
             // run tests
             tests[i](j);
@@ -232,7 +230,8 @@ TEST_CASE("test_parser")
             virtual char read() override
             {
                 if (idx_ >= str_.size())
-                    return std::char_traits<char>::eof();
+                    return '\0';
+                // return std::char_traits<char>::eof();
                 return str_[idx_++];
             }
 
