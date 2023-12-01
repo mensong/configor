@@ -194,7 +194,7 @@ template <
                             int>::type = 0>
 void to_value(_ValTy& c, const _Ty (&v)[_Num])
 {
-    c = nullptr;
+    value_constructor<_ValTy>::template reset<value_constant::array>(c);
     for (size_t i = 0; i < _Num; i++)
     {
         c[i] = v[i];
@@ -276,7 +276,7 @@ template <typename _ValTy, typename _Ty, size_t _Num,
           typename std::enable_if<std::is_constructible<_ValTy, _Ty>::value, int>::type = 0>
 void to_value(_ValTy& c, const std::array<_Ty, _Num>& v)
 {
-    c = nullptr;
+    value_constructor<_ValTy>::template reset<value_constant::array>(c);
     for (size_t i = 0; i < _Num; i++)
     {
         c[i] = v.at(i);
@@ -297,7 +297,7 @@ template <typename _ValTy, typename _Ty,
           typename std::enable_if<std::is_constructible<_ValTy, _Ty>::value, int>::type = 0>
 void to_value(_ValTy& c, const std::vector<_Ty>& v)
 {
-    c = nullptr;
+    value_constructor<_ValTy>::template reset<value_constant::array>(c);
     for (size_t i = 0; i < v.size(); ++i)
     {
         c[i] = v.at(i);
@@ -319,7 +319,7 @@ template <typename _ValTy, typename _Ty,
           typename std::enable_if<std::is_constructible<_ValTy, _Ty>::value, int>::type = 0>
 void to_value(_ValTy& c, const std::deque<_Ty>& v)
 {
-    c = nullptr;
+    value_constructor<_ValTy>::template reset<value_constant::array>(c);
     for (size_t i = 0; i < v.size(); ++i)
     {
         c[i] = v.at(i);
@@ -341,7 +341,7 @@ template <typename _ValTy, typename _Ty,
           typename std::enable_if<std::is_constructible<_ValTy, _Ty>::value, int>::type = 0>
 void to_value(_ValTy& c, const std::list<_Ty>& v)
 {
-    c         = nullptr;
+    value_constructor<_ValTy>::template reset<value_constant::array>(c);
     auto iter = v.begin();
     for (size_t i = 0; iter != v.end(); ++i, ++iter)
     {
@@ -364,7 +364,7 @@ template <typename _ValTy, typename _Ty,
           typename std::enable_if<std::is_constructible<_ValTy, _Ty>::value, int>::type = 0>
 void to_value(_ValTy& c, const std::forward_list<_Ty>& v)
 {
-    c         = nullptr;
+    value_constructor<_ValTy>::template reset<value_constant::array>(c);
     auto iter = v.begin();
     for (size_t i = 0; iter != v.end(); ++i, ++iter)
     {
@@ -388,7 +388,7 @@ template <typename _ValTy, typename _Ty,
           typename std::enable_if<std::is_constructible<_ValTy, _Ty>::value, int>::type = 0>
 void to_value(_ValTy& c, const std::set<_Ty>& v)
 {
-    c         = nullptr;
+    value_constructor<_ValTy>::template reset<value_constant::array>(c);
     auto iter = v.begin();
     for (size_t i = 0; i < v.size(); ++i, ++iter)
     {
@@ -411,7 +411,7 @@ template <typename _ValTy, typename _Ty,
           typename std::enable_if<std::is_constructible<_ValTy, _Ty>::value, int>::type = 0>
 void to_value(_ValTy& c, const std::unordered_set<_Ty>& v)
 {
-    c         = nullptr;
+    value_constructor<_ValTy>::template reset<value_constant::array>(c);
     auto iter = v.begin();
     for (size_t i = 0; i < v.size(); ++i, ++iter)
     {
@@ -436,7 +436,7 @@ template <typename _ValTy, typename _KeyTy, typename _Ty,
                                   int>::type = 0>
 void to_value(_ValTy& c, const std::map<_KeyTy, _Ty>& v)
 {
-    c = nullptr;
+    value_constructor<_ValTy>::template reset<value_constant::object>(c);
     for (const auto& p : v)
     {
         c[p.first] = p.second;
@@ -461,7 +461,7 @@ template <typename _ValTy, typename _KeyTy, typename _Ty,
                                   int>::type = 0>
 void to_value(_ValTy& c, const std::unordered_map<_KeyTy, _Ty>& v)
 {
-    c = nullptr;
+    value_constructor<_ValTy>::template reset<value_constant::object>(c);
     for (const auto& p : v)
     {
         c[p.first] = p.second;
@@ -797,6 +797,7 @@ public:
         __CONFIGOR_FROM_CONF_REQUIRED(field, name) \
     }
 
+// REQUIRED/OPTIONAL
 #define __CONFIGOR_TO_CONF_REQUIRED1(field) __CONFIGOR_TO_CONF_REQUIRED(field, #field)
 #define __CONFIGOR_TO_CONF_REQUIRED2(field, name) __CONFIGOR_TO_CONF_REQUIRED(field, name)
 #define __CONFIGOR_TO_CONF_OPTIONAL1(field) __CONFIGOR_TO_CONF_OPTIONAL(field, #field)
@@ -814,9 +815,6 @@ public:
     __CONFIGOR_EXPAND(__CONFIGOR_CALL_OVERLOAD(__CONFIGOR_FROM_CONF_REQUIRED, __VA_ARGS__))
 #define __CONFIGOR_FROM_CONF_CALL_OVERLOADOPTIONAL(...) \
     __CONFIGOR_EXPAND(__CONFIGOR_CALL_OVERLOAD(__CONFIGOR_FROM_CONF_OPTIONAL, __VA_ARGS__))
-
-#define CONFIGOR_REQUIRED(field) REQUIRED(field)
-#define CONFIGOR_OPTIONAL(field) OPTIONAL(field)
 
 // Bind custom type to configor value
 // e.g.
